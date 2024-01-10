@@ -6,10 +6,33 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log"
 	"os"
-	"runtime/pprof"
 	"sort"
 )
+
+type WordCount struct {
+	Word  string `json:"word"`
+	Count int    `json:"count"`
+}
+
+func sortWords(reverse bool, m map[string]int) []WordCount {
+	words := []WordCount{}
+	for w, n := range m {
+		words = append(words, WordCount{Word: w, Count: n})
+	}
+
+	if reverse {
+		sort.Slice(words, func(i, j int) bool {
+			return words[i].Count < words[j].Count
+		})
+	} else {
+		sort.Slice(words, func(i, j int) bool {
+			return words[i].Count > words[j].Count
+		})
+	}
+	return words
+}
 
 func countWords(r io.Reader) (map[string]int, error) {
 	m := make(map[string]int)
@@ -23,39 +46,17 @@ func countWords(r io.Reader) (map[string]int, error) {
 	return m, scan.Err()
 }
 
-type count struct {
-	Word       string
-	Occurences int
-}
-
-func sortWords(reverse bool, m map[string]int) []count {
-	words := []count{}
-	for w, n := range m {
-		words = append(words, count{Word: w, Occurences: n})
-	}
-
-	if reverse {
-		sort.Slice(words, func(i, j int) bool { return words[i].Occurences < words[j].Occurences })
-	} else {
-		sort.Slice(words, func(i, j int) bool { return words[i].Occurences > words[j].Occurences })
-	}
-
-	return words
-}
-
 func main() {
 	var (
-		reverseFlag    bool
-		jsonFlag       bool
-		cpuProfileFlag string
+		reverseFlag bool
+		jsonFlag    bool
 	)
 
 	flag.BoolVar(&reverseFlag, "reverse", false, "reverse sort order")
 	flag.BoolVar(&jsonFlag, "json", false, "output to json format")
-	flag.StringVar(&cpuProfileFlag, "cpuprofile", "", "create a cpu profile")
 	flag.Usage = func() {
 		fmt.Fprintln(os.Stderr, "countwords: count and sort words by their number of occurences.")
-		fmt.Fprintln(os.Stderr, "usage: countwords [OPTIONS] IN [OUT]")
+		fmt.Fprintln(os.Stderr, "usage: countwords [OPTIONS] [IN|-] [OUT]")
 		fmt.Fprintln(os.Stderr, "options:")
 		flag.PrintDefaults()
 		fmt.Fprintln(os.Stderr, "")
@@ -64,24 +65,12 @@ func main() {
 	}
 	flag.Parse()
 
-	if cpuProfileFlag != "" {
-		f, err := os.Create(cpuProfileFlag)
-		if err != nil {
-			fatalf("can't create cpu profile: %v", err)
-		}
-		defer f.Close()
-
-		if err := pprof.StartCPUProfile(f); err != nil {
-			fatalf("can't start cpu profile: %v", err)
-		}
-		defer pprof.StopCPUProfile()
-	}
-
 	if flag.NArg() == 0 {
-		fatalf("no input file")
+		log.Fatal("no input file")
 	}
 
 	var (
+		// Create and set defaults for IN and OUT.
 		in  io.Reader = os.Stdin
 		out io.Writer = os.Stdout
 	)
@@ -89,7 +78,7 @@ func main() {
 	if flag.Arg(0) != "-" {
 		f, err := os.Open(flag.Arg(0))
 		if err != nil {
-			fatalf("open input file:", err)
+			log.Fatalf("open input file: %s", err)
 		}
 		defer f.Close()
 		in = f
@@ -98,7 +87,7 @@ func main() {
 	if flag.NArg() == 2 {
 		f, err := os.Create(flag.Arg(1))
 		if err != nil {
-			fatalf("create output file: %v", err)
+			log.Fatalf("create output file: %v", err)
 		}
 		defer f.Close()
 		out = f
@@ -106,23 +95,19 @@ func main() {
 
 	m, err := countWords(in)
 	if err != nil {
-		fatalf("can't count words: %v", err)
-		os.Exit(1)
+		log.Fatalf("can't count words: %v", err)
 	}
 
 	counts := sortWords(reverseFlag, m)
 	if jsonFlag {
 		enc := json.NewEncoder(out)
 		enc.SetIndent("", "  ")
-		enc.Encode(counts)
+		if err := enc.Encode(counts); err != nil {
+			log.Fatalf("json encoding failed: %v", err)
+		}
 	} else {
 		for _, c := range counts {
-			fmt.Fprintf(out, "%16d %s\n", c.Occurences, c.Word)
+			fmt.Fprintf(out, "%16d %s\n", c.Count, c.Word)
 		}
 	}
-}
-
-func fatalf(format string, args ...interface{}) {
-	fmt.Fprintf(os.Stderr, "countwords: "+format, args...)
-	os.Exit(1)
 }
